@@ -59,7 +59,7 @@ defaultTestCircles = "data/circles"
 defaultTestSquares = "data/squares"
 defaultShape = 28
 defaultBias = 0
-defaultWeights = "weights.csv"
+defaultWeights = None
 
 done = False
 
@@ -289,6 +289,204 @@ def gradioDemo(
     )
 
 
+def testOnFlagged(
+    shape=defaultShape,
+    bias=defaultBias,
+    weights=defaultWeights,
+):
+    predictions = []
+    accuracy = 0
+    totalfiles = 0
+
+    weights = weights
+
+    weightsloader = Loader("Loading weights...", "Done!", 0.05).start()
+
+    if type(weights) == str:
+        with open(weights, "r") as f:
+            print("\nExisting weights found. Loading...")
+            weights = []
+            reader = csv.reader(f)
+            for row in reader:
+                # Check if row isn't empty
+                if row != []:
+                    for i in range(shape):
+                        for j in range(shape):
+                            weights.append(float(row[i * shape + j]))
+    else:
+        print("\nNo weights found. Setting all weights to 0...")
+        weights = np.zeros(int(shape * shape))
+
+    weightsloader.stop()
+
+    def predictFromActivations(activations, weights=weights, bias=bias):
+        output = np.dot(activations, weights)
+        if output < bias:
+            return ["circle", output]
+        elif output >= bias:
+            return ["square", output]
+
+    predictionsLoader = Loader(
+        "Running on flagged images...", "Done!", 0.05
+    ).start()  # noqa: E501
+    # Loop through flagged images
+    for dirs in os.listdir("flagged/img"):
+        file = os.listdir("flagged/img/{}".format(dirs))[0]
+        image = np.array(
+            Image.open("flagged/img/{}/{}".format(dirs, file)).convert("L")
+        )  # noqa: E501
+        image = (image / 255).flatten()
+
+        predictions.append(predictFromActivations(image))
+        predictions[-1].append(file)
+
+    predictionsLoader.stop()
+
+    checkLoader = Loader("Checking predictions...", "Done!", 0.05).start()
+
+    with open("flagged/log.csv", "r") as f:
+        # Check logs for original predictions
+        reader = csv.reader(f)
+        for row in reader:
+            totalfiles += 1
+            if row == 0:
+                continue
+
+            img, output, flag, username, timestamp = row
+
+            # Get img file name without path
+            img = img.split("\\")[-1]
+
+            for prediction in predictions:
+                if prediction[2] == img and prediction[0] != output:
+                    accuracy += 1
+                    break
+
+    checkLoader.stop()
+    print(
+        "{}% accuracy on {} flagged images".format(
+            accuracy / totalfiles * 100, totalfiles
+        )  # noqa: E501
+    )
+
+
+def trainOnFlagged(
+    shape=defaultShape,
+    bias=defaultBias,
+    weights=defaultWeights,
+    outputf=defaultWeights,
+    retest=True,
+    count=1,
+):
+    predictions = []
+    accuracy = 0
+    totalfiles = 0
+
+    weights = weights
+
+    weightsloader = Loader("Loading weights...", "Done!", 0.05).start()
+
+    if type(weights) == str:
+        with open(weights, "r") as f:
+            print("\nExisting weights found. Loading...")
+            weights = []
+            reader = csv.reader(f)
+            for row in reader:
+                # Check if row isn't empty
+                if row != []:
+                    for i in range(shape):
+                        for j in range(shape):
+                            weights.append(float(row[i * shape + j]))
+    else:
+        print("\nNo weights found. Setting all weights to 0...")
+        weights = np.zeros(int(shape * shape))
+
+    weightsloader.stop()
+
+    for i in range(count):
+        epochLoader = Loader("Training epoch {}".format(i + 1), "Done!", 0.05)
+
+        def predictFromActivations(activations, weights=weights, bias=bias):
+            output = np.dot(activations, weights)
+            if output < bias:
+                return ["circle", output]
+            elif output >= bias:
+                return ["square", output]
+
+        # Loop through flagged images
+        for dirs in os.listdir("flagged/img"):
+            file = os.listdir("flagged/img/{}".format(dirs))[0]
+            image = np.array(
+                Image.open("flagged/img/{}/{}".format(dirs, file)).convert("L")
+            )  # noqa: E501
+            image = (image / 255).flatten()
+
+            predictions.append(predictFromActivations(image))
+            predictions[-1].append(file)
+
+        with open("flagged/log.csv", "r") as f:
+            # Check logs for original predictions
+            reader = csv.reader(f)
+            for row in reader:
+                totalfiles += 1
+                if row == 0:
+                    continue
+
+                img, output, flag, username, timestamp = row
+
+                # Get img file name without path
+                fullImgPath = img
+                img = img.split("\\")[-1]
+
+                for prediction in predictions:
+                    if prediction[2] == img and prediction[0] != output:
+                        accuracy += 1
+                        break
+                    elif prediction[2] == img and prediction[0] == output:
+                        # Update weights
+                        image = np.array(
+                            Image.open(
+                                "flagged/img/{}/{}".format(
+                                    fullImgPath.split("\\")[-2], img
+                                )  # noqa: E501
+                            ).convert("L")
+                        )
+                        image = (image / 255).flatten()
+
+                        negative = -1
+
+                        if prediction[1] < bias:
+                            negative = 1
+
+                        for i in range(shape):
+                            for j in range(shape):
+                                weights[i * shape + j] += (
+                                    image[i * shape + j] * negative
+                                )  # noqa: E501
+                        break
+
+        epochLoader.stop()
+
+    if outputf:
+        outputloader = Loader("Saving weights...", "Done!", 0.05).start()
+        with open(outputf, "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(weights)
+        outputloader.stop()
+
+    if retest:
+        randomWeights = np.random.randint(1, 100000)
+        with open("tempWeights{}.csv".format(randomWeights), "w") as f:
+            writer = csv.writer(f)
+            writer.writerow(weights)
+        testOnFlagged(
+            shape=shape,
+            bias=bias,
+            weights="tempWeights{}.csv".format(randomWeights),
+        )
+        os.remove("tempWeights{}.csv".format(randomWeights))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -301,6 +499,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--gradio",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--testOnFlagged",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--trainOnFlagged",
         action="store_true",
     )
     parser.add_argument(
@@ -339,6 +545,10 @@ if __name__ == "__main__":
         "--port",
         type=int,
     )
+    parser.add_argument(
+        "--retest",
+        action="store_true",
+    )
     args = parser.parse_args()
 
     if args.train:
@@ -366,4 +576,19 @@ if __name__ == "__main__":
             weights=args.weights if args.weights else defaultWeights,
             host=args.host if args.host else "127.0.0.1",
             port=args.port if args.port else 8080,
+        )
+    elif args.testOnFlagged:
+        testOnFlagged(
+            shape=args.shape if args.shape else defaultShape,
+            bias=args.bias if args.bias else defaultBias,
+            weights=args.weights if args.weights else defaultWeights,
+        )
+    elif args.trainOnFlagged:
+        trainOnFlagged(
+            shape=args.shape if args.shape else defaultShape,
+            bias=args.bias if args.bias else defaultBias,
+            weights=args.weights if args.weights else defaultWeights,
+            outputf=args.output if args.output else False,
+            count=args.count if args.count else 1,
+            retest=args.retest,
         )
