@@ -1,5 +1,5 @@
 # Perceptron
-A basic customizable single layer perceptron.
+A basic customizable single layer perceptron, like the Mark 1 Perceptron.
 
 ## Docs
 `python train.py --train` - Trains the model \
